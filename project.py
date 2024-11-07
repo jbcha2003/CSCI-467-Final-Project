@@ -150,8 +150,6 @@ misclass_data = {
 misclass_df = pd.DataFrame(misclass_data)
 
 # Plot the misclassification errors by label for each model
-import matplotlib.pyplot as plt
-
 fig, ax = plt.subplots(figsize=(10, 6))
 
 # Set positions for each model's bars
