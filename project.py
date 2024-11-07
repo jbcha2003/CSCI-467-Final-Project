@@ -25,6 +25,12 @@ def plot_hyperparameter_tuning_results(search_results, title):
     plt.grid(True)
     plt.show()
 
+def print_label_distribution(split_name, labels):
+    label_counts = Counter(labels)
+    print(f"\nLabel distribution in {split_name} set:")
+    for label, count in label_counts.items():
+        print(f"Label {label}: {count} examples")
+
 # Load the data
 data = pd.read_csv('Filtered_PTID_Data.csv')
 
@@ -52,10 +58,24 @@ X_imputed = imputer.fit_transform(X)
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X_imputed)
 
-# Split the dataset into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(
+# Split the dataset into training, development, and testing sets
+X_train_full, X_test, y_train_full, y_test = train_test_split(
     X_scaled, y, test_size=0.2, random_state=42, stratify=y
 )
+
+# Further split the training set into training and dev (validation) sets
+X_train, X_dev, y_train, y_dev = train_test_split(
+    X_train_full, y_train_full, test_size=0.25, random_state=42, stratify=y_train_full
+)
+
+# Print the sizes of each split
+print(f"Training set size: {len(X_train)}")
+print(f"Development set size: {len(X_dev)}")
+print(f"Testing set size: {len(X_test)}")
+
+print_label_distribution("Training", y_train)
+print_label_distribution("Development", y_dev)
+print_label_distribution("Testing", y_test)
 
 ### Baseline Method ###
 # Predict the most common label (majority class) in the training set
@@ -106,7 +126,7 @@ param_dist_svm = {
 # Initialize SVM model
 svm = SVC(random_state=42)
 
-# Set up RandomizedSearchCV for SVM with 5-fold cross-validation
+# Set up RandomizedSearchCV for SVM with 5-fold cross-validation, using the dev set
 random_search_svm = RandomizedSearchCV(
     estimator=svm,
     param_distributions=param_dist_svm,
@@ -118,15 +138,15 @@ random_search_svm = RandomizedSearchCV(
     random_state=42
 )
 
-# Fit RandomizedSearchCV to the data
-random_search_svm.fit(X_train, y_train)
+# Fit RandomizedSearchCV to the training data, validating on the dev set
+random_search_svm.fit(X_dev, y_dev)
 
 # Display best parameters and best score from randomized search
 print("Best Parameters from Randomized Search for SVM:", random_search_svm.best_params_)
 print("Best Cross-Validation Accuracy from Randomized Search for SVM:", random_search_svm.best_score_)
 
 # Plot hyperparameter tuning results for SVM
-#plot_hyperparameter_tuning_results(random_search_svm, "SVM Hyperparameter Tuning")
+plot_hyperparameter_tuning_results(random_search_svm, "SVM Hyperparameter Tuning")
 
 # Additional Step: Calculate Misclassifications for SVM
 # Predict using the best SVM model
