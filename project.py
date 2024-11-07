@@ -6,9 +6,24 @@ from sklearn.metrics import classification_report, accuracy_score, confusion_mat
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from collections import Counter
-from scipy.stats import uniform  # Import uniform for randomized search
+from scipy.stats import uniform
 import numpy as np
+import matplotlib.pyplot as plt  # Import matplotlib for plotting
 
+# Define plotting function for hyperparameter tuning results
+def plot_hyperparameter_tuning_results(search_results, title):
+    # Extract the cross-validation scores and parameter settings
+    scores = search_results.cv_results_['mean_test_score']
+    params = search_results.cv_results_['params']
+    
+    # Plot the scores
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(len(scores)), scores, marker='o', linestyle='-')
+    plt.title(title)
+    plt.xlabel("Hyperparameter Combination Index")
+    plt.ylabel("Mean Cross-Validation Accuracy")
+    plt.grid(True)
+    plt.show()
 
 # Load the data
 data = pd.read_csv('Filtered_PTID_Data.csv')
@@ -81,13 +96,11 @@ print("\nMisclassifications by True Label:")
 for label, count in misclassified_per_class.items():
     print(f"{label}: {count} misclassified examples")
 
-
 ### Support Vector Machine (SVM) with Randomized Search for Hyperparameter Tuning ###
-# Define parameter distribution for SVM
 param_dist_svm = {
-    'C': uniform(loc=0.1, scale=10),  # Regularization parameter in range [0.1, 10]
-    'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],  # Different kernel functions
-    'gamma': ['scale', 'auto']  # Gamma settings for non-linear kernels
+    'C': uniform(loc=0.1, scale=10),
+    'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
+    'gamma': ['scale', 'auto']
 }
 
 # Initialize SVM model
@@ -97,11 +110,11 @@ svm = SVC(random_state=42)
 random_search_svm = RandomizedSearchCV(
     estimator=svm,
     param_distributions=param_dist_svm,
-    n_iter=20,  # Number of random combinations to try
-    scoring='accuracy',  # Metric to optimize
-    cv=5,  # 5-fold cross-validation
-    verbose=2,  # Print progress
-    n_jobs=-1,  # Use all available cores
+    n_iter=20,
+    scoring='accuracy',
+    cv=5,
+    verbose=2,
+    n_jobs=-1,
     random_state=42
 )
 
@@ -112,31 +125,50 @@ random_search_svm.fit(X_train, y_train)
 print("Best Parameters from Randomized Search for SVM:", random_search_svm.best_params_)
 print("Best Cross-Validation Accuracy from Randomized Search for SVM:", random_search_svm.best_score_)
 
-### Train the Final SVM Model with Best Parameters ###
-best_svm = random_search_svm.best_estimator_
-best_svm.fit(X_train, y_train)
+# Plot hyperparameter tuning results for SVM
+#plot_hyperparameter_tuning_results(random_search_svm, "SVM Hyperparameter Tuning")
 
-# Predict and evaluate the final SVM model
-y_svm_pred = best_svm.predict(X_test)
+# Additional Step: Calculate Misclassifications for SVM
+# Predict using the best SVM model
+y_svm_pred = random_search_svm.best_estimator_.predict(X_test)
 
-print("\nSupport Vector Machine Model with Best Hyperparameters:")
-print("Accuracy:", accuracy_score(y_test, y_svm_pred))
-
-### Error Analysis for SVM ###
-# Count total number of misclassified examples
-total_misclassified_svm = np.sum(y_test != y_svm_pred)
-print("\nError Analysis for SVM:")
-print(f"Total Misclassified Examples: {total_misclassified_svm}")
-
-# Analyze which labels are most often misclassified
+# Calculate confusion matrix for SVM predictions
 conf_matrix_svm = confusion_matrix(y_test, y_svm_pred)
 misclassified_per_class_svm = {}
 
 for i in range(len(conf_matrix_svm)):
-    misclassified_count_svm = sum(conf_matrix_svm[i]) - conf_matrix_svm[i][i]  # Total errors per true class
-    misclassified_per_class_svm[f"True Label {i}"] = misclassified_count_svm
+    misclassified_count = sum(conf_matrix_svm[i]) - conf_matrix_svm[i][i]
+    misclassified_per_class_svm[f"True Label {i}"] = misclassified_count
 
-# Display which labels are most often misclassified for SVM
-print("\nMisclassifications by True Label for SVM:")
-for label, count in misclassified_per_class_svm.items():
-    print(f"{label}: {count} misclassified examples")
+# Combine misclassification data from each model
+misclass_data = {
+    'True Label': [f'True Label {i}' for i in range(len(conf_matrix))],
+    'Logistic Regression': [misclassified_per_class[f'True Label {i}'] for i in range(len(conf_matrix))],
+    'SVM': [misclassified_per_class_svm[f'True Label {i}'] for i in range(len(conf_matrix))]
+}
+
+misclass_df = pd.DataFrame(misclass_data)
+
+# Plot the misclassification errors by label for each model
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# Set positions for each model's bars
+x = range(len(misclass_df))
+bar_width = 0.25  # Width of each bar
+
+# Plot each model's misclassifications
+ax.bar([i + bar_width for i in x], misclass_df['Logistic Regression'], width=bar_width, label='Logistic Regression')
+ax.bar([i + 2 * bar_width for i in x], misclass_df['SVM'], width=bar_width, label='SVM')
+
+# Customize the plot
+ax.set_xticks([i + bar_width for i in x])
+ax.set_xticklabels(misclass_df['True Label'])
+ax.set_ylabel("Number of Misclassified Examples")
+ax.set_title("Misclassification Errors by Label for Each Model")
+ax.legend()
+
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
