@@ -1,4 +1,9 @@
 import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.svm import SVC
@@ -9,6 +14,22 @@ from collections import Counter
 from scipy.stats import uniform
 import numpy as np
 import matplotlib.pyplot as plt  # Import matplotlib for plotting
+
+class NeuralNetwork(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(NeuralNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)  # First hidden layer
+        self.relu = nn.ReLU()  # Activation function
+        self.fc2 = nn.Linear(hidden_size, output_size)  # Output layer
+        self.softmax = nn.Softmax(dim=1)  # Softmax for multi-class classification
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        x = self.softmax(x)
+        return x
+
 
 # Define plotting function for hyperparameter tuning results
 def plot_hyperparameter_tuning_results(search_results, title):
@@ -190,3 +211,82 @@ ax.legend()
 plt.xticks(rotation=45)
 plt.tight_layout()
 plt.show()
+
+# Convert data to PyTorch tensors
+X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train.values, dtype=torch.long)  # Long for classification labels
+X_dev_tensor = torch.tensor(X_dev, dtype=torch.float32)
+y_dev_tensor = torch.tensor(y_dev.values, dtype=torch.long)
+
+# Create DataLoaders
+batch_size = 32
+train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+dev_dataset = TensorDataset(X_dev_tensor, y_dev_tensor)
+dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False)
+
+# Model parameters
+input_size = X_train.shape[1]  # Number of features
+hidden_size = 64  # Number of neurons in the hidden layer
+output_size = len(y.unique())  # Number of classes
+
+# Initialize the model, loss function, and optimizer
+model = NeuralNetwork(input_size, hidden_size, output_size)
+criterion = nn.CrossEntropyLoss()  # Loss function for classification
+optimizer = optim.Adam(model.parameters(), lr=0.001)  # Adam optimizer
+
+# Training loop
+epochs = 50
+model.train()
+for epoch in range(epochs):
+    epoch_loss = 0.0
+    for X_batch, y_batch in train_loader:
+        optimizer.zero_grad()  # Zero gradients from the last step
+        y_pred = model(X_batch)  # Forward pass
+        loss = criterion(y_pred, y_batch)  # Compute loss
+        loss.backward()  # Backpropagation
+        optimizer.step()  # Update weights
+        epoch_loss += loss.item()
+
+    print(f"Epoch {epoch + 1}/{epochs}, Loss: {epoch_loss / len(train_loader):.4f}")
+
+from sklearn.metrics import accuracy_score, confusion_matrix
+
+# Evaluate the model on the development set
+model.eval()  # Set the model to evaluation mode
+y_dev_pred = []
+with torch.no_grad():
+    for X_batch, _ in dev_loader:
+        y_logits = model(X_batch)
+        y_pred = torch.argmax(y_logits, dim=1)
+        y_dev_pred.extend(y_pred.numpy())
+
+# Compute accuracy
+dev_accuracy = accuracy_score(y_dev, y_dev_pred)
+print(f"Development Set Accuracy: {dev_accuracy:.4f}")
+
+# Confusion matrix
+conf_matrix = confusion_matrix(y_dev, y_dev_pred)
+print("Confusion Matrix:\n", conf_matrix)
+
+X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
+y_test_tensor = torch.tensor(y_test.values, dtype=torch.long)
+
+test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+y_test_pred = []
+model.eval()
+with torch.no_grad():
+    for X_batch, _ in test_loader:
+        y_logits = model(X_batch)
+        y_pred = torch.argmax(y_logits, dim=1)
+        y_test_pred.extend(y_pred.numpy())
+
+# Compute test accuracy
+test_accuracy = accuracy_score(y_test, y_test_pred)
+print(f"Test Set Accuracy: {test_accuracy:.4f}")
+
+
+
