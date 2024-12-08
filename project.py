@@ -3,25 +3,25 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.svm import SVC
-from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from collections import Counter
 from scipy.stats import uniform
 import numpy as np
-import matplotlib.pyplot as plt  # Import matplotlib for plotting
+import matplotlib.pyplot as plt
+from itertools import product
 
 class NeuralNetwork(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super(NeuralNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)  # First hidden layer
-        self.relu = nn.ReLU()  # Activation function
-        self.fc2 = nn.Linear(hidden_size, output_size)  # Output layer
-        self.softmax = nn.Softmax(dim=1)  # Softmax for multi-class classification
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, output_size)
+        self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         x = self.fc1(x)
@@ -31,13 +31,8 @@ class NeuralNetwork(nn.Module):
         return x
 
 
-# Define plotting function for hyperparameter tuning results
 def plot_hyperparameter_tuning_results(search_results, title):
-    # Extract the cross-validation scores and parameter settings
     scores = search_results.cv_results_['mean_test_score']
-    params = search_results.cv_results_['params']
-    
-    # Plot the scores
     plt.figure(figsize=(10, 6))
     plt.plot(range(len(scores)), scores, marker='o', linestyle='-')
     plt.title(title)
@@ -46,247 +41,275 @@ def plot_hyperparameter_tuning_results(search_results, title):
     plt.grid(True)
     plt.show()
 
+
 def print_label_distribution(split_name, labels):
     label_counts = Counter(labels)
     print(f"\nLabel distribution in {split_name} set:")
     for label, count in label_counts.items():
         print(f"Label {label}: {count} examples")
 
-# Load the data
-data = pd.read_csv('Filtered_PTID_Data.csv')
 
-# Drop unnecessary columns
-data_cleaned = data.drop(columns=['Unnamed: 0', 'PTID'])
+def preprocess_data(file_path):
+    data = pd.read_csv(file_path)
+    data_cleaned = data.drop(columns=['Unnamed: 0', 'PTID'])
+    data_cleaned = data_cleaned.replace(-4, pd.NA)
+    data_cleaned['label'] = data_cleaned['label'].map({'low': 0, 'inter': 1, 'high': 2})
+    X = data_cleaned.drop(columns=['label']).apply(pd.to_numeric, errors='coerce')
+    y = data_cleaned['label']
 
-# Replace placeholder values (-4) with NaN for missing data handling
-data_cleaned = data_cleaned.replace(-4, pd.NA)
+    imputer = SimpleImputer(strategy='median')
+    X_imputed = imputer.fit_transform(X)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_imputed)
+    return X_scaled, y
 
-# Convert the 'label' column to numerical categories
-data_cleaned['label'] = data_cleaned['label'].map({'low': 0, 'inter': 1, 'high': 2})
 
-# Separate features and target variable
-X = data_cleaned.drop(columns=['label'])
-y = data_cleaned['label']
+def split_data(X, y):
+    X_train_full, X_test, y_train_full, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    X_train, X_dev, y_train, y_dev = train_test_split(
+        X_train_full, y_train_full, test_size=0.25, random_state=42, stratify=y_train_full
+    )
+    return X_train, X_dev, X_test, y_train, y_dev, y_test
 
-# Convert all columns to numeric, coercing errors to NaN
-X = X.apply(pd.to_numeric, errors='coerce')
 
-# Impute missing values using the median strategy
-imputer = SimpleImputer(strategy='median')
-X_imputed = imputer.fit_transform(X)
+def evaluate_baseline(y_train, y_test):
+    majority_class = Counter(y_train).most_common(1)[0][0]
+    y_baseline_pred = [majority_class] * len(y_test)
+    print("Baseline Method:")
+    print("Accuracy:", accuracy_score(y_test, y_baseline_pred))
+    return y_baseline_pred
 
-# Feature scaling
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X_imputed)
 
-# Split the dataset into training, development, and testing sets
-X_train_full, X_test, y_train_full, y_test = train_test_split(
-    X_scaled, y, test_size=0.2, random_state=42, stratify=y
-)
+def train_logistic_regression(X_train, y_train, X_test, y_test):
+    model = LogisticRegression(max_iter=5000, solver='saga', multi_class='multinomial', random_state=42)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    print("\nLogistic Regression Model:")
+    print("Accuracy:", accuracy_score(y_test, y_pred))
+    return model, y_pred
 
-# Further split the training set into training and dev (validation) sets
-X_train, X_dev, y_train, y_dev = train_test_split(
-    X_train_full, y_train_full, test_size=0.25, random_state=42, stratify=y_train_full
-)
 
-# Print the sizes of each split
-print(f"Training set size: {len(X_train)}")
-print(f"Development set size: {len(X_dev)}")
-print(f"Testing set size: {len(X_test)}")
+def train_svm_with_random_search(X_dev, y_dev):
+    param_dist_svm = {
+        'C': uniform(loc=0.1, scale=10),
+        'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
+        'gamma': ['scale', 'auto']
+    }
+    svm = SVC(random_state=42)
+    random_search_svm = RandomizedSearchCV(
+        estimator=svm, param_distributions=param_dist_svm, n_iter=20,
+        scoring='accuracy', cv=5, verbose=2, n_jobs=-1, random_state=42
+    )
+    random_search_svm.fit(X_dev, y_dev)
+    print("Best Parameters from Randomized Search for SVM:", random_search_svm.best_params_)
+    print("Best Cross-Validation Accuracy from Randomized Search for SVM:", random_search_svm.best_score_)
+    plot_hyperparameter_tuning_results(random_search_svm, "SVM Hyperparameter Tuning")
+    return random_search_svm.best_estimator_
 
-print_label_distribution("Training", y_train)
-print_label_distribution("Development", y_dev)
-print_label_distribution("Testing", y_test)
 
-### Baseline Method ###
-# Predict the most common label (majority class) in the training set
-majority_class = Counter(y_train).most_common(1)[0][0]
-y_baseline_pred = [majority_class] * len(y_test)
+def train_neural_network(X_train, y_train, X_dev, y_dev, input_size, hidden_size, output_size, epochs=50, batch_size=32):
+    X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+    y_train_tensor = torch.tensor(y_train.values, dtype=torch.long)
+    train_loader = DataLoader(TensorDataset(X_train_tensor, y_train_tensor), batch_size=batch_size, shuffle=True)
 
-# Evaluate Baseline
-print("Baseline Method:")
-print("Accuracy:", accuracy_score(y_test, y_baseline_pred))
+    model = NeuralNetwork(input_size, hidden_size, output_size)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-### Logistic Regression Model ###
-# Initialize and fit the logistic regression model
-model = LogisticRegression(max_iter=5000, solver='saga', multi_class='multinomial', random_state=42)
-model.fit(X_train, y_train)
+    model.train()
+    for epoch in range(epochs):
+        epoch_loss = 0.0
+        for X_batch, y_batch in train_loader:
+            optimizer.zero_grad()
+            y_pred = model(X_batch)
+            loss = criterion(y_pred, y_batch)
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+        print(f"Epoch {epoch + 1}/{epochs}, Loss: {epoch_loss / len(train_loader):.4f}")
 
-# Predict and evaluate the model
-y_pred = model.predict(X_test)
+    return model
 
-# Evaluate Logistic Regression
-print("\nLogistic Regression Model:")
-print("Accuracy:", accuracy_score(y_test, y_pred))
+def train_and_evaluate_nn(X_train, y_train, X_dev, y_dev, input_size, output_size, param_grid):
+    best_model = None
+    best_accuracy = 0
+    best_params = None
 
-### Experimentation Summary ###
-print("\nExperimentation Summary:")
-print(f"Baseline Accuracy: {accuracy_score(y_test, y_baseline_pred):.2f}")
-print(f"Logistic Regression Accuracy: {accuracy_score(y_test, y_pred):.2f}")
+    results = []
 
-### Error Analysis ###
-conf_matrix = confusion_matrix(y_test, y_pred)
-misclassified_per_class = {}
+    for params in product(*param_grid.values()):
+        hidden_size, lr, batch_size, epochs = params
 
-for i in range(len(conf_matrix)):
-    misclassified_count = sum(conf_matrix[i]) - conf_matrix[i][i]  # Total errors per true class
-    misclassified_per_class[f"True Label {i}"] = misclassified_count
+        X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+        y_train_tensor = torch.tensor(y_train.values, dtype=torch.long)
+        X_dev_tensor = torch.tensor(X_dev, dtype=torch.float32)
+        y_dev_tensor = torch.tensor(y_dev.values, dtype=torch.long)
 
-# Display which labels are most often misclassified
-print("\nMisclassifications by True Label:")
-for label, count in misclassified_per_class.items():
-    print(f"{label}: {count} misclassified examples")
+        train_loader = DataLoader(TensorDataset(X_train_tensor, y_train_tensor), batch_size=batch_size, shuffle=True)
+        dev_loader = DataLoader(TensorDataset(X_dev_tensor, y_dev_tensor), batch_size=batch_size, shuffle=False)
 
-### Support Vector Machine (SVM) with Randomized Search for Hyperparameter Tuning ###
-param_dist_svm = {
-    'C': uniform(loc=0.1, scale=10),
-    'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
-    'gamma': ['scale', 'auto']
-}
+        model = NeuralNetwork(input_size, hidden_size, output_size)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=lr)
 
-# Initialize SVM model
-svm = SVC(random_state=42)
+        model.train()
+        for epoch in range(epochs):
+            for X_batch, y_batch in train_loader:
+                optimizer.zero_grad()
+                y_pred = model(X_batch)
+                loss = criterion(y_pred, y_batch)
+                loss.backward()
+                optimizer.step()
 
-# Set up RandomizedSearchCV for SVM with 5-fold cross-validation, using the dev set
-random_search_svm = RandomizedSearchCV(
-    estimator=svm,
-    param_distributions=param_dist_svm,
-    n_iter=20,
-    scoring='accuracy',
-    cv=5,
-    verbose=2,
-    n_jobs=-1,
-    random_state=42
-)
+        model.eval()
+        y_dev_pred = []
+        with torch.no_grad():
+            for X_batch, _ in dev_loader:
+                y_logits = model(X_batch)
+                y_dev_pred.extend(torch.argmax(y_logits, dim=1).numpy())
 
-# Fit RandomizedSearchCV to the training data, validating on the dev set
-random_search_svm.fit(X_dev, y_dev)
+        dev_accuracy = accuracy_score(y_dev, y_dev_pred)
+        results.append({
+            'hidden_size': hidden_size,
+            'lr': lr,
+            'batch_size': batch_size,
+            'epochs': epochs,
+            'dev_accuracy': dev_accuracy
+        })
 
-# Display best parameters and best score from randomized search
-print("Best Parameters from Randomized Search for SVM:", random_search_svm.best_params_)
-print("Best Cross-Validation Accuracy from Randomized Search for SVM:", random_search_svm.best_score_)
+        print(f"Params: {params}, Dev Accuracy: {dev_accuracy:.4f}")
+        if dev_accuracy > best_accuracy:
+            best_accuracy = dev_accuracy
+            best_model = model
+            best_params = params
 
-# Plot hyperparameter tuning results for SVM
-plot_hyperparameter_tuning_results(random_search_svm, "SVM Hyperparameter Tuning")
+    print(f"\nBest Parameters: {best_params}, Best Dev Accuracy: {best_accuracy:.4f}")
+    return best_model, best_params, results
 
-# Additional Step: Calculate Misclassifications for SVM
-# Predict using the best SVM model
-y_svm_pred = random_search_svm.best_estimator_.predict(X_test)
 
-# Calculate confusion matrix for SVM predictions
-conf_matrix_svm = confusion_matrix(y_test, y_svm_pred)
-misclassified_per_class_svm = {}
+def evaluate_model(model, X_test, y_test):
+    model.eval() 
 
-for i in range(len(conf_matrix_svm)):
-    misclassified_count = sum(conf_matrix_svm[i]) - conf_matrix_svm[i][i]
-    misclassified_per_class_svm[f"True Label {i}"] = misclassified_count
+    X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
+    y_test_tensor = torch.tensor(y_test.values, dtype=torch.long)
+    
+    test_loader = DataLoader(TensorDataset(X_test_tensor, y_test_tensor), batch_size=32, shuffle=False)
 
-# Combine misclassification data from each model
-misclass_data = {
-    'True Label': [f'True Label {i}' for i in range(len(conf_matrix))],
-    'Logistic Regression': [misclassified_per_class[f'True Label {i}'] for i in range(len(conf_matrix))],
-    'SVM': [misclassified_per_class_svm[f'True Label {i}'] for i in range(len(conf_matrix))]
-}
+    y_pred = []
+    with torch.no_grad():
+        for X_batch, _ in test_loader:
+            y_logits = model(X_batch)
+            y_pred.extend(torch.argmax(y_logits, dim=1).numpy())
 
-misclass_df = pd.DataFrame(misclass_data)
+    acc = accuracy_score(y_test, y_pred)
+    print(f"Test Set Accuracy: {acc:.4f}")
 
-# Plot the misclassification errors by label for each model
-fig, ax = plt.subplots(figsize=(10, 6))
+    conf_matrix = confusion_matrix(y_test, y_pred)
 
-# Set positions for each model's bars
-x = range(len(misclass_df))
-bar_width = 0.25  # Width of each bar
+    misclassified_per_class = {}
+    for i in range(len(conf_matrix)):
+        misclassified_count = sum(conf_matrix[i]) - conf_matrix[i][i]
+        misclassified_per_class[f"True Label {i}"] = misclassified_count
 
-# Plot each model's misclassifications
-ax.bar([i + bar_width for i in x], misclass_df['Logistic Regression'], width=bar_width, label='Logistic Regression')
-ax.bar([i + 2 * bar_width for i in x], misclass_df['SVM'], width=bar_width, label='SVM')
+    return y_pred, conf_matrix, misclassified_per_class
 
-# Customize the plot
-ax.set_xticks([i + bar_width for i in x])
-ax.set_xticklabels(misclass_df['True Label'])
-ax.set_ylabel("Number of Misclassified Examples")
-ax.set_title("Misclassification Errors by Label for Each Model")
-ax.legend()
+def plot_misclassification_errors(misclassified_df):
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bar_width = 0.2
+    x = range(len(misclassified_df))
+    ax.bar(x, misclassified_df['Logistic Regression'], width=bar_width, label='Logistic Regression')
+    ax.bar([i + bar_width for i in x], misclassified_df['SVM'], width=bar_width, label='SVM')
+    ax.bar([i + 2 * bar_width for i in x], misclassified_df['Neural Network'], width=bar_width, label='Neural Network')
+    ax.set_xticks([i + bar_width for i in x])
+    ax.set_xticklabels(misclassified_df['True Label'])
+    ax.set_ylabel("Number of Misclassified Examples")
+    ax.set_title("Misclassification Errors by Label for Each Model")
+    ax.legend()
 
-plt.xticks(rotation=45)
-plt.tight_layout()
-plt.show()
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
 
-# Convert data to PyTorch tensors
-X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
-y_train_tensor = torch.tensor(y_train.values, dtype=torch.long)  # Long for classification labels
-X_dev_tensor = torch.tensor(X_dev, dtype=torch.float32)
-y_dev_tensor = torch.tensor(y_dev.values, dtype=torch.long)
+def plot_nn_tuning_results(results):
+    import seaborn as sns
+    import pandas as pd
+    results_df = pd.DataFrame(results)
+    plt.figure(figsize=(12, 8))
+    sns.scatterplot(
+        x=range(len(results_df)),
+        y='dev_accuracy',
+        hue='hidden_size',
+        size='batch_size',
+        palette='viridis',
+        data=results_df,
+        legend="full"
+    )
 
-# Create DataLoaders
-batch_size = 32
-train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-
-dev_dataset = TensorDataset(X_dev_tensor, y_dev_tensor)
-dev_loader = DataLoader(dev_dataset, batch_size=batch_size, shuffle=False)
-
-# Model parameters
-input_size = X_train.shape[1]  # Number of features
-hidden_size = 64  # Number of neurons in the hidden layer
-output_size = len(y.unique())  # Number of classes
-
-# Initialize the model, loss function, and optimizer
-model = NeuralNetwork(input_size, hidden_size, output_size)
-criterion = nn.CrossEntropyLoss()  # Loss function for classification
-optimizer = optim.Adam(model.parameters(), lr=0.001)  # Adam optimizer
-
-# Training loop
-epochs = 50
-model.train()
-for epoch in range(epochs):
-    epoch_loss = 0.0
-    for X_batch, y_batch in train_loader:
-        optimizer.zero_grad()  # Zero gradients from the last step
-        y_pred = model(X_batch)  # Forward pass
-        loss = criterion(y_pred, y_batch)  # Compute loss
-        loss.backward()  # Backpropagation
-        optimizer.step()  # Update weights
-        epoch_loss += loss.item()
-
-    print(f"Epoch {epoch + 1}/{epochs}, Loss: {epoch_loss / len(train_loader):.4f}")
-
-from sklearn.metrics import accuracy_score, confusion_matrix
-
-# Evaluate the model on the development set
-model.eval()  # Set the model to evaluation mode
-y_dev_pred = []
-with torch.no_grad():
-    for X_batch, _ in dev_loader:
-        y_logits = model(X_batch)
-        y_pred = torch.argmax(y_logits, dim=1)
-        y_dev_pred.extend(y_pred.numpy())
-
-# Compute accuracy
-dev_accuracy = accuracy_score(y_dev, y_dev_pred)
-print(f"Development Set Accuracy: {dev_accuracy:.4f}")
-
-# Confusion matrix
-conf_matrix = confusion_matrix(y_dev, y_dev_pred)
-print("Confusion Matrix:\n", conf_matrix)
-
-X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
-y_test_tensor = torch.tensor(y_test.values, dtype=torch.long)
-
-test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-y_test_pred = []
-model.eval()
-with torch.no_grad():
-    for X_batch, _ in test_loader:
-        y_logits = model(X_batch)
-        y_pred = torch.argmax(y_logits, dim=1)
-        y_test_pred.extend(y_pred.numpy())
-
-# Compute test accuracy
-test_accuracy = accuracy_score(y_test, y_test_pred)
-print(f"Test Set Accuracy: {test_accuracy:.4f}")
+    plt.title("Neural Network Hyperparameter Tuning")
+    plt.xlabel("Hyperparameter Combination Index")
+    plt.ylabel("Validation Accuracy")
+    plt.grid(True)
+    plt.legend(title="Hidden Size")
+    plt.show()
 
 
 
+
+def main():
+    file_path = 'Filtered_PTID_Data.csv'
+    X, y = preprocess_data(file_path)
+    X_train, X_dev, X_test, y_train, y_dev, y_test = split_data(X, y)
+
+    print(f"Training set size: {len(X_train)}")
+    print(f"Development set size: {len(X_dev)}")
+    print(f"Testing set size: {len(X_test)}")
+    print_label_distribution("Training", y_train)
+    print_label_distribution("Development", y_dev)
+    print_label_distribution("Testing", y_test)
+
+    evaluate_baseline(y_train, y_test)
+
+    logistic_model, logistic_preds = train_logistic_regression(X_train, y_train, X_test, y_test)
+
+    best_svm = train_svm_with_random_search(X_dev, y_dev)
+    svm_preds = best_svm.predict(X_test)
+
+    input_size = X_train.shape[1]
+    output_size = len(y.unique())
+
+    param_grid = {
+        "hidden_size": [32, 64, 128],
+        "lr": [0.001, 0.01, 0.1],
+        "batch_size": [16, 32, 64],
+        "epochs": [10, 20]
+    }
+
+    best_nn_model, best_nn_params, nn_results = train_and_evaluate_nn(
+        X_train, y_train, X_dev, y_dev, input_size, output_size, param_grid
+    )
+
+    plot_nn_tuning_results(nn_results)
+
+    nn_preds, nn_conf_matrix, nn_misclassified = evaluate_model(best_nn_model, X_test, y_test)
+    
+    logistic_conf_matrix = confusion_matrix(y_test, logistic_preds)
+    svm_conf_matrix = confusion_matrix(y_test, svm_preds)
+
+    misclassified_data = {
+        "True Label": [f"True Label {i}" for i in range(len(logistic_conf_matrix))],
+        "Logistic Regression": [sum(logistic_conf_matrix[i]) - logistic_conf_matrix[i][i] for i in range(len(logistic_conf_matrix))],
+        "SVM": [sum(svm_conf_matrix[i]) - svm_conf_matrix[i][i] for i in range(len(svm_conf_matrix))],
+        "Neural Network": [nn_misclassified[f"True Label {i}"] for i in range(len(nn_conf_matrix))]
+    }
+
+    misclassified_df = pd.DataFrame(misclassified_data)
+    plot_misclassification_errors(misclassified_df)
+
+
+
+
+
+if __name__ == "__main__":
+    main()
