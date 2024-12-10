@@ -13,7 +13,9 @@ from collections import Counter
 from scipy.stats import uniform
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from itertools import product
+
 
 class NeuralNetwork(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
@@ -223,7 +225,8 @@ def plot_misclassification_errors(misclassified_df):
     ax.bar([i + bar_width for i in x], misclassified_df['SVM'], width=bar_width, label='SVM')
     ax.bar([i + 2 * bar_width for i in x], misclassified_df['Neural Network'], width=bar_width, label='Neural Network')
     ax.set_xticks([i + bar_width for i in x])
-    ax.set_xticklabels(misclassified_df['True Label'])
+    label_mapping = {0: "low", 1: "med", 2: "high"}
+    ax.set_xticklabels([label_mapping[int(label[-1])] for label in misclassified_df['True Label']])
     ax.set_ylabel("Number of Misclassified Examples")
     ax.set_title("Misclassification Errors by Label for Each Model")
     ax.legend()
@@ -233,8 +236,6 @@ def plot_misclassification_errors(misclassified_df):
     plt.show()
 
 def plot_nn_tuning_results(results):
-    import seaborn as sns
-    import pandas as pd
     results_df = pd.DataFrame(results)
     plt.figure(figsize=(12, 8))
     sns.scatterplot(
